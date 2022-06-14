@@ -131,6 +131,7 @@ static void init_conn(int efd, struct econn *ec)
 {
     int ret;
 
+    // 建立連線
     ec->fd = socket(sss.ss_family, SOCK_STREAM, 0);
     ec->offs = 0;
     ec->flags = 0;
@@ -140,8 +141,10 @@ static void init_conn(int efd, struct econn *ec)
         exit(1);
     }
 
+    // 設定 fd 控制權為 nonblock 形式
     fcntl(ec->fd, F_SETFL, O_NONBLOCK);
 
+    // sys call 連線
     do {
         ret = connect(ec->fd, (struct sockaddr *) &sss, sssln);
     } while (ret && errno == EAGAIN);
@@ -152,7 +155,8 @@ static void init_conn(int efd, struct econn *ec)
     }
 
     struct epoll_event evt = {
-        .events = EPOLLOUT, .data.ptr = ec,
+        .events = EPOLLOUT,
+        .data.ptr = ec,
     };
 
     if (epoll_ctl(efd, EPOLL_CTL_ADD, ec->fd, &evt)) {
@@ -170,6 +174,7 @@ static void *worker(void *arg)
 
     (void) arg;
 
+    // 建立 concurreny 總體的連線
     int efd = epoll_create(concurrency);
     if (efd == -1) {
         perror("epoll");
@@ -181,6 +186,7 @@ static void *worker(void *arg)
 
     for (;;) {
         do {
+            // 監聽所有 I/O 事件
             nevts = epoll_wait(efd, evts, sizeof(evts) / sizeof(evts[0]), -1);
         } while (!exit_i && nevts < 0 && errno == EINTR);
 
@@ -201,6 +207,7 @@ static void *worker(void *arg)
                 exit(1);
             }
 
+            // epoll 錯誤處理
             if (evts[n].events & EPOLLERR) {
                 /* normally this should not happen */
                 static unsigned int number_of_errors_logged = 0;
@@ -215,6 +222,7 @@ static void *worker(void *arg)
                     fprintf(stderr, "EPOLLERR caused by unknown error\n");
                 }
                 atomic_fetch_add(&socket_errors, 1);
+                // 關閉有錯誤的 socket fd
                 close(ec->fd);
                 if (num_requests > max_requests)
                     continue;
@@ -228,9 +236,11 @@ static void *worker(void *arg)
                 exit(1);
             }
 
+            // client 傳送訊息，確認事件狀態為可寫
             if (evts[n].events & EPOLLOUT) {
                 ret = send(ec->fd, outbuf + ec->offs, outbufsize - ec->offs, 0);
 
+                // 處理錯誤傳送時發生的情況
                 if (ret == -1 && errno != EAGAIN) {
                     /* TODO: something better than this */
                     perror("send");
@@ -238,9 +248,10 @@ static void *worker(void *arg)
                 }
 
                 if (ret > 0) {
+                    // 將錯誤訊息存入
                     if (debug & HTTP_REQUEST_DEBUG)
                         write(2, outbuf + ec->offs, outbufsize - ec->offs);
-
+                    // 更新傳送的資料長度
                     ec->offs += ret;
 
                     /* write done? schedule read */
@@ -259,6 +270,7 @@ static void *worker(void *arg)
 
             } else if (evts[n].events & EPOLLIN) {
                 for (;;) {
+                    // 獲得從 server 傳來的資料
                     ret = recv(ec->fd, inbuf, sizeof(inbuf), 0);
 
                     if (ret == -1 && errno != EAGAIN) {
