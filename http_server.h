@@ -11,7 +11,8 @@ struct http_server_param {
 struct http_service {
     bool is_stopped;
     struct list_head worker;
-} struct http_server {
+};
+struct http_server {
     struct socket *sock;
     struct list_head list;
     struct work_struct http_work;
