@@ -4,6 +4,8 @@
 #include <linux/sched/signal.h>
 #include <linux/tcp.h>
 
+#include <linux/workqueue.h>  // CMWQ
+#include <net/sock.h>
 #include "http_parser.h"
 #include "http_server.h"
 
@@ -38,6 +40,10 @@ struct http_request {
     char request_url[128];
     int complete;
 };
+
+// CMWQ
+struct http_service daemon = {.is_stopped = false};
+struct workqueue_struct *khttp_wq;  // set up workqueue
 
 static int http_server_recv(struct socket *sock, char *buf, size_t size)
 {
@@ -175,6 +181,7 @@ static int http_server_worker(void *arg)
                 pr_err("recv error: %d\n", ret);
             break;
         }
+        pr_err("recv : %d\n", ret);
         http_parser_execute(&parser, &setting, buf, ret);
         if (request.complete && !http_should_keep_alive(&parser))
             break;
@@ -185,11 +192,43 @@ static int http_server_worker(void *arg)
     return 0;
 }
 
+// initialize the worker
+static void http_worker(struct work_struct *work)
+{
+    struct http_server *worker =
+        container_of(work, struct http_server, http_work);
+    http_server_worker(worker->sock);
+}
+
+// ref : kecho create_work
+static struct work_struct *create_work(struct socket *sk)
+{
+    struct http_server *client;
+    // GFP_KERNEL the flag of allocation
+    // https://elixir.bootlin.com/linux/latest/source/include/linux/gfp.h#L341
+    client = kmalloc(sizeof(struct http_server), GFP_KERNEL);
+
+    if (!client)
+        return NULL;
+
+    client->sock = sk;
+
+    INIT_WORK(&client->http_work, http_worker);
+    list_add(&client->list, &daemon.worker);
+    return &client->http_work;
+}
+
 int http_server_daemon(void *arg)
 {
     struct socket *socket;
-    struct task_struct *worker;
     struct http_server_param *param = (struct http_server_param *) arg;
+
+    struct work_struct *work;
+    // CMWQ
+    khttp_wq = alloc_workqueue("khttp_wq", WQ_UNBOUND, 0);
+    if (!khttp_wq)
+        return -ENOMEM;
+    INIT_LIST_HEAD(&daemon.worker);
 
     allow_signal(SIGKILL);
     allow_signal(SIGTERM);
@@ -202,11 +241,15 @@ int http_server_daemon(void *arg)
             pr_err("kernel_accept() error: %d\n", err);
             continue;
         }
-        worker = kthread_run(http_server_worker, socket, KBUILD_MODNAME);
-        if (IS_ERR(worker)) {
-            pr_err("can't create more worker process\n");
+        // CMWQ
+        work = create_work(socket);
+        if (!work) {
+            pr_err("can't create work\n");
             continue;
         }
+        queue_work(khttp_wq, work);
     }
+
+    daemon.is_stopped = true;
     return 0;
 }
