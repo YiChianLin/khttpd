@@ -191,6 +191,18 @@ static int http_server_worker(void *arg)
     kfree(buf);
     return 0;
 }
+// free memory
+static void free_work(void)
+{
+    struct http_server *tmp, *target;
+    // list : member
+    list_for_each_entry_safe (target, tmp, &daemon.worker, list) {
+        kernel_sock_shutdown(target->sock, SHUT_RDWR);
+        flush_work(&target->http_work);
+        sock_release(target->sock);
+        kfree(target);
+    }
+}
 
 // initialize the worker
 static void http_worker(struct work_struct *work)
@@ -251,5 +263,10 @@ int http_server_daemon(void *arg)
     }
 
     daemon.is_stopped = true;
+
+    // free work and workqueue
+    free_work();
+    destroy_workqueue(khttp_wq);
+
     return 0;
 }
