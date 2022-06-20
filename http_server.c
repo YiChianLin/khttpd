@@ -165,7 +165,7 @@ static int http_server_worker(void *arg)
     allow_signal(SIGKILL);
     allow_signal(SIGTERM);
 
-    buf = kmalloc(RECV_BUFFER_SIZE, GFP_KERNEL);
+    buf = kzalloc(RECV_BUFFER_SIZE, GFP_KERNEL);
     if (!buf) {
         pr_err("can't allocate memory!\n");
         return -1;
@@ -181,10 +181,10 @@ static int http_server_worker(void *arg)
                 pr_err("recv error: %d\n", ret);
             break;
         }
-        pr_err("recv : %d\n", ret);
         http_parser_execute(&parser, &setting, buf, ret);
         if (request.complete && !http_should_keep_alive(&parser))
             break;
+        memset(buf, 0, RECV_BUFFER_SIZE);
     }
     kernel_sock_shutdown(socket, SHUT_RDWR);
     sock_release(socket);
@@ -197,9 +197,7 @@ static void free_work(void)
     struct http_server *tmp, *target;
     // list : member
     list_for_each_entry_safe (target, tmp, &daemon.worker, list) {
-        kernel_sock_shutdown(target->sock, SHUT_RDWR);
         flush_work(&target->http_work);
-        sock_release(target->sock);
         kfree(target);
     }
 }
